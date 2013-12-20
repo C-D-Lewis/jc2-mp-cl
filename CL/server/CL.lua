@@ -1,72 +1,37 @@
 -- Configuration
-serverColour = Color(255, 200, 200, 200)	--ABGR
+serverColour = Color(255, 200, 200, 200)	--ABGR?
 joinColour = Color(255, 10, 255, 10)
 deathColour = Color(255, 10, 10, 255)
 announceColour = Color(255, 0, 255, 255)
+adminColour = Color(255, 10, 10, 255)
 
 -- Globals
-homes = {}	-- A Table to store home location
-kills = {}	-- Track kills
+homes = {}	-- Home locations
+kills = {}	-- Player kill counts
 settings = {}	-- Admin settings
+admins = {} -- Store admin GUIDs 
 
--- Load admin settings
-loadAdminSettings = function(path)
-	-- Open file
-	local file = io.open(path, "r")
-
-	-- For whole file
-	while true do
-		-- Get next line
-		local line = file:read("*line")
-
-		-- While file has lines
-		if line != nil then
-			-- Get divider
-			local s, e = string.find(line, "=")
-
-			-- If found
-			if s != nil and e != nil then
-				local prefix = string.sub(line, 0, s - 1)
-				local suffix = string.sub(line, e + 1)
-
-				-- Any setting!
-				if suffix == "true" then
-					settings[prefix] = true
-				elseif suffix == "false" then
-					settings[prefix] = false
-				else
-					settings[prefix] = suffix	-- Plain text, such as MOTD
-				end
-
-				-- Show in console
-				print(prefix, settings[prefix])
-			else
-				print("ERROR: Parsing line: " .. line)
-			end			
-		else
-			break
-		end
-	end
-
-	--Finally
-	file:close()
-end
+--------------------------------------- Event Functions ---------------------------------------
 
 -- When the module is loaded
 onModuleLoad = function(args)
+	print("---------------------------------------")
 	print("Setting up...")
 
 	-- Load file settings
 	loadAdminSettings("settings.cfg")
+	print("Settings loaded.")
 
 	-- Setup kills table for all current players
 	for player in Server:GetPlayers() do
 		kills[player:GetName()] = 0
 	end
+	print("Scoreboard created.")
 
 	-- Notify
-	Chat:Broadcast("CL Reloaded. Reset your homes!", announceColour)
-	print("Module loaded")
+	Chat:Broadcast("CL Module Reloaded. Reset your homes!", announceColour)
+	print("CL setup complete.")
+	print("---------------------------------------")
 end
 
 -- When a player joins the game
@@ -74,10 +39,19 @@ onPlayerJoin = function(args)
 	local player = args.player
 	local name = args.player:GetName()
 	
+	-- Notify others
 	Chat:Broadcast(name .. " joined the game.", joinColour)
-	Chat:Send(player, settings["motd"], serverColour)
+	
+	local motd = settings["motd"]
 
-	-- Reset kill count
+	-- Issue message of the day to new player
+	if motd != nil then
+		Chat:Send(player, motd, serverColour)
+	else
+		print("'motd' not set!")
+	end
+
+	-- Reset kill count in case player exited out of a tight spot!
 	kills[name] = 0
 end
 
@@ -96,15 +70,17 @@ onPlayerChat = function(args)
 	-- Reset RNG
 	math.randomseed(os.time())
 
+	--------------------------------------- Player Commands ---------------------------------------
+
 	-- Issue help
 	if message == "/help" then
-		Chat:Send(player, "Available commands:", serverColour) 
-		Chat:Send(player, "/help /kill /locate", serverColour)
+		respond(player, "Available commands:", serverColour) 
+		Chat:Send(player, "/help /players /kill /findme", serverColour)
 		Chat:Send(player, "/getvehicle [car, plane, random] or <wikivalue 0 - 91>", serverColour)
 		Chat:Send(player, "/getweapon [handgun, revolver, sawnoff, smg, assault, sniper, shotgun, rocket, grenade, sam, bubble, minigun, rocket2]", serverColour)
 		Chat:Send(player, "/sethome /gohome ", serverColour)
 		Chat:Send(player, "/gotoplayer <name>", serverColour)
-		Chat:Send(player, "/scores /about /server /players", serverColour)
+		Chat:Send(player, "/scores /about /server !adminhelp", serverColour)
 		
 		return false -- Do not show the chat message
 	end	
@@ -117,16 +93,19 @@ onPlayerChat = function(args)
 	end
 
 	-- Get the player's location
-	if message == "/locate" then
-		Chat:Send(player, "XYZ: " .. tostring(player:GetPosition()), serverColour)
+	if message == "/findme" then
+		respond(player, "XYZ: " .. tostring(player:GetPosition()), serverColour)
 		
 		return false
 	end
 
 	-- Spawn vehicles
 	if string.find(message, "/getvehicle") then
+		-- If vehicle setting has been set
 		if settings["allowvehicles"] != nil then
+			-- If vehicle spawning is allowed
 			if settings["allowvehicles"] == true then
+				-- Function for use in pcall()
 				createVehicle = function(id, position)
 					Vehicle.Create(id, position, player:GetAngle())
 				end
@@ -134,8 +113,8 @@ onPlayerChat = function(args)
 				-- Get type
 				local type = string.sub(message, 13)
 
-				--Off to the side
-				position.x = position.x +  10 -- Northern offset
+				--Offset away from player
+				position.x = position.x + 10
 
 				-- Shortcut types
 				if type == "car" then
@@ -144,15 +123,16 @@ onPlayerChat = function(args)
 					Vehicle.Create(81, position, player:GetAngle())
 				elseif type == "random" then
 					local id = math.random(0, 91)
-					Chat:Send(player, "Rolled vehicleId " .. id, serverColour)
+					respond(player, "Rolled vehicleId " .. id, serverColour)
 					if pcall(createVehicle, id, position) then
-						-- Success!
+						-- Success! Vehicle has been created in pcall argument function
 					else	
-						Chat:Send(player, "Invalid vehicleId! Try again.", serverColour)
+						respond(player, "Invalid vehicleId! Try again.", serverColour)
 					end
 				
 				-- Numerical value
 				else
+					-- Get id from type
 					local id = tonumber(type)
 					
 					-- If it's a valid number
@@ -161,29 +141,37 @@ onPlayerChat = function(args)
 						if id >= 0 and id <= 91 then
 							Vehicle.Create(id, position, player:GetAngle())
 						else
-							Chat:Send(player, "Valid range is 0 - 91", serverColour)
+							respond(player, "Valid range is 0 - 91", serverColour)
 						end
 					end
 				end
 			else
-				Chat:Send(player, "Vehicle spawns are not allowed!", serverColour)
+				respond(player, "Vehicle spawns are not allowed!", serverColour)
 			end
 		else
+			respond(player, "Vehicles permission not specified by admin.", serverColour)
 			print("ERROR: 'allowvehicles' setting not set!")
 		end
 
 		return false
 	end
 	
+	-- Spawn a weapon
 	if string.find(message, "/getweapon") then
+		-- If weapon setting has been set
 		if settings["allowweapons"] != nil then
+			-- If weapon spawning is allowed
 			if settings["allowweapons"] == true then
-				-- Slots 0, 1 or 2 -> Left, Right or Primary
+				-- Slots 0, 1 or 2 -> Left, Right or Primary (Two-handed)
 				giveWeapon = function(id, slot, number)
+					-- If not two handed weapon
 					if slot != 2 then
-						if number == 1 then	-- Two-H
+						--If just one hand
+						if number == 1 then
 							player:GiveWeapon(0, Weapon(id))
-						elseif number == 2 then	-- Duel wield!
+
+						-- Duel wield!
+						elseif number == 2 then	
 							player:GiveWeapon(0, Weapon(id))
 							player:GiveWeapon(1, Weapon(id))
 						end
@@ -195,6 +183,8 @@ onPlayerChat = function(args)
 				-- Get type, then id
 				local type = string.sub(message, 12)
 				local id = 0
+				
+				-- Default settings (arbitrary)
 				local slot = 0	-- Primary
 				local number = 2 -- Both hands
 
@@ -246,17 +236,18 @@ onPlayerChat = function(args)
 				-- Give the weapon
 				if id > 0 then
 					if pcall(giveWeapon, id, slot, number) then
-						Chat:Send(player, "Gave weapon: " .. type, serverColour)
+						respond(player, "Gave weapon: " .. type, serverColour)
 					else
-						Chat:Send(player, "Invalid weaponId", serverColour)
+						respond(player, "Invalid weaponId", serverColour)
 					end
 				else
-					Chat:Send(player, "Invalid weapon type. See /help for list.", serverColour)
+					respond(player, "Invalid weapon type. See /help for list.", serverColour)
 				end
 			else
-				Chat:Send(player, "Weapons are not allowed!", serverColour)
+				respond(player, "Weapons are not allowed!", serverColour)
 			end
 		else
+			respond(player, "Weapons permission not specified by admin.", serverColour)
 			print("ERROR: 'allowweapons' setting not set!")
 		end
 		
@@ -265,30 +256,32 @@ onPlayerChat = function(args)
 
 	-- Teleport to a player
 	if string.find(message, "/gotoplayer") then
+		-- If teleport setting has been set
 		if settings["allowteleports"] != nil then
+			-- If teleports are allowed
 			if settings["allowteleports"] == true then
 				-- Get name
 				local target = string.sub(message, 13)
 
-				-- Get all players matching target description
-				local results = Player.Match(target)
+				-- Get Player
+				local targetPlayer = getPlayerFromName(target)
 
-				-- For all matching players, find exact name match
-				for index, otherplayer in ipairs(results) do -- May be redundant
-					if otherplayer:GetName() == target then
-						player:SetPosition(otherplayer:GetPosition())
-						Chat:Broadcast("Teleported " .. playerName .. " to " .. otherplayer:GetName(), serverColour)
+				-- Beam me up, Scotty!
+				if targetPlayer != nil then
+					player:SetPosition(targetPlayer:GetPosition())
+					Chat:Broadcast("Teleported " .. playerName .. " to " .. targetPlayer:GetName(), serverColour)
 
-						return false
-					end
-				end
-
+					return false
+				
 				-- No match
-				Chat:Send(player, "No match found for player " .. target, deathColour)
+				else
+					respond(player, "No match found for player " .. target, deathColour)	
+				end
 			else
-				Chat:Send(player, "Teleporting not allowed!", serverColour)
+				respond(player, "Teleporting not allowed!", serverColour)
 			end
 		else
+			respond(player, "Teleport permission not specified by admin.", serverColour)
 			print("ERROR: 'allowteleports' setting not set!")
 		end
 
@@ -297,14 +290,17 @@ onPlayerChat = function(args)
 
 	-- Set player home
 	if message == "/sethome" then
+		-- If teleport setting has been set
 		if settings["allowteleports"] != nil then
+			-- If teleports are allowed
 			if settings["allowteleports"] == true then
 				homes[playerName] = player:GetPosition()
-				Chat:Send(player, "Home set!", serverColour)
+				respond(player, "Home set!", serverColour)
 			else
-				Chat:Send(player, "Teleporting not allowed!", serverColour)
+				respond(player, "Teleporting not allowed!", serverColour)
 			end
 		else
+			respond(player, "Teleport permission not specified by admin.", serverColour)
 			print("ERROR: 'allowteleports' setting not set!")
 		end
 
@@ -313,7 +309,9 @@ onPlayerChat = function(args)
 
 	--Go home
 	if message == "/gohome" then
+		-- If teleport setting has been set
 		if settings["allowteleports"] != nil then
+			-- If teleports are allowed
 			if settings["allowteleports"] == true then
 				if homes[playerName] != nil then
 					local pos = homes[playerName]
@@ -324,21 +322,23 @@ onPlayerChat = function(args)
 					-- Go there
 					player:SetPosition(pos)
 				else
-					Chat:Send(player, "You have no home set. Use /sethome to set one.", serverColour)
+					
+					respond(player, "You have no home set. Use /sethome to set one.", serverColour)
 				end
 			else
-				Chat:Send(player, "Teleporting not allowed!", serverColour)
+				respond(player, "Teleporting not allowed!", serverColour)
 			end
 		else
+			respond(player, "Teleport permission not specified by admin.", serverColour)
 			print("ERROR: 'allowteleports' setting not set!")
 		end
 		
 		return false
 	end
 
-	-- About
+	-- About this module
 	if message == "/about" then
-		Chat:Send(player, "JC2-MP Module 'CL' by Chris Lewis and Adam Taylor", serverColour)
+		respond(player, "JC2-MP Module 'CL' by Chris Lewis and Adam Taylor.", serverColour)
 		Chat:Send(player, "Source available at http://github.com/C-D-Lewis/jc2-mp-cl", serverColour)
 
 		return false
@@ -346,14 +346,23 @@ onPlayerChat = function(args)
 
 	-- Server info
 	if message == "/server" then
-		Chat:Send(player, settings["serverinfo"], serverColour)
+		local info = settings["serverinfo"]
+
+		if info != nil then
+			respond(player, info, serverColour)
+		else
+			respond(player, "No server information available.", serverColour)
+			print("'serverinfo' not set!")
+		end
 
 		return false
 	end
 
 	-- List players
 	if message == "/players" then
-		Chat:Send(player, "Current Players online:", serverColour)
+		respond(player, "Current players online:", serverColour)
+		
+		-- Show all players
 		for p in Server:GetPlayers() do
 			Chat:Send(player, p:GetName(), serverColour)
 		end
@@ -363,8 +372,9 @@ onPlayerChat = function(args)
 
 	-- Scoreboard
 	if message == "/scores" then
-		Chat:Send(player, "Current Scores:", serverColour)
+		respond(player, "Current scores:", serverColour)
 
+		-- Show all players' scores
 		for key, value in pairs(kills) do
 			Chat:Send(player, key .. " - " .. value .. " kills", serverColour)
 		end
@@ -372,7 +382,87 @@ onPlayerChat = function(args)
 		return false
 	end
 
-	return true -- Do show the message
+	--------------------------------------- Admin Commands ---------------------------------------
+
+	-- Get a SteamID for a Player
+	if string.find(message, "!steamid") then
+		-- If Player is admin
+		if checkAdmin(player) then
+			-- Get name
+			local name = string.sub(message, 10)
+			
+			-- Return the SteamID
+			if getPlayerFromName(name) != nil then
+				respond(player, "SteamId for " .. name .. ": " .. tostring(getPlayerFromName(name):GetSteamId()), adminColour)
+				print("SteamId for " .. name .. ": " .. tostring(getPlayerFromName(name):GetSteamId()))
+			else
+				respond(player, "No match found for player " .. name, adminColour)
+			end	
+		else
+			respond(player, "You do not have permission to run this command!", serverColour)
+		end
+		
+		return false
+	end
+	
+	-- Kick a player
+	if string.find(message, "!kick")then
+		-- If Player is admin
+		if checkAdmin(player) then
+			-- Get name
+			local name = string.sub(message, 7)
+			
+			-- Kick the Player
+			if getPlayerFromName(name) != nil then
+				respond(player, "KICKING " .. name, adminColour)
+				print("KICKING " .. name)
+				getPlayerFromName(name):Kick()
+			else
+				respond(player, "No match found for player " .. name, adminColour)
+			end
+		else
+			respond(player, "You do not have permission to run this command!", serverColour)
+		end
+		
+		return false
+	end
+	
+	-- Ban a Player
+	if string.find(message, "!ban")then
+		-- If Player is admin
+		if checkAdmin(player) then
+			-- Get name
+			local name = string.sub(message, 6)
+			
+			-- Ban the Player
+			if getPlayerFromName(name) != nil then
+				respond(player, "BANNING " .. name, adminColour)
+				print("BANNING " .. name)
+				getPlayerFromName(name):Ban()
+			else
+				respond(player, "No match found for player " .. name, adminColour)
+			end
+		else
+			respond(player, "You do not have permission to run this command!", serverColour)
+		end
+		
+		return false
+	end
+	
+	-- Give admin help
+	if message == "!adminhelp" then
+		-- If Player is admin
+		if checkAdmin(player) then
+			respond(player, "Available commands:", adminColour) 
+			Chat:Send(player, "!steamid !kick !ban", adminColour)
+		else
+			respond(player, "You do not have permission to run this command!", serverColour)
+		end
+		
+		return false
+	end
+	
+	return true -- Do show the message, for it is chit chat
 end
 
 -- When a player dies
@@ -380,14 +470,17 @@ onPlayerDeath = function(args)
 	local playerName = args.player:GetName()
 	local reason = args.reason
 
+	-- In case Player died mysteriously
 	local msg = playerName .. " is no more."
 
 	-- If it was murder
 	if args.killer then
+		-- Get name
 		local killerName = args.killer:GetName()
 
-		-- Can't get a point from suicide
+		-- Can't get a point from suicide!
 		if killerName != playerName then
+			-- Reason specific messages
 			if reason == 1 then
 				msg = killerName .. " smashed " .. playerName .. "."
 			elseif reason == 2 then
@@ -398,13 +491,14 @@ onPlayerDeath = function(args)
 				msg = playerName .. " was caught in " .. killerName .. "'s headlights."
 			end
 
-			-- Award points
+			-- Award points to killer
 			if kills[killerName] != nil then 
 				kills[killerName] = kills[killerName] + 1
 			else
 				kills[killerName] = 1
 			end
 		else
+			-- Player killed themselves!
 			msg = playerName .. " hurt itself in its confusion!"
 		end
 
@@ -421,23 +515,104 @@ onPlayerDeath = function(args)
 		end
 	end
 
+	-- If deaths are to be shown
 	if settings["showdeaths"] == true then
 		Chat:Broadcast(msg, deathColour)
 	end
 end
 
+--------------------------------------- General Functions ---------------------------------------
+
+-- Load admin settings from path
+loadAdminSettings = function(path)
+	-- Open file
+	local file = io.open(path, "r")
+
+	-- For whole file
+	while true do
+		-- Get next line
+		local line = file:read("*line")
+
+		-- While file has lines
+		if line != nil then
+			-- Line is not a comment
+			if string.find(line, "//") == nil then
+				-- Get divider
+				local s, e = string.find(line, "=")
+
+				-- If found
+				if s != nil and e != nil then
+					local prefix = string.sub(line, 0, s - 1)
+					local suffix = string.sub(line, e + 1)
+
+					-- Any boolean setting!
+					if suffix == "true" then
+						settings[prefix] = true
+					elseif suffix == "false" then
+						settings[prefix] = false
+					
+					-- Adding a new admin
+					elseif prefix == "admin" then
+						table.insert(admins,suffix)
+						settings[prefix] = suffix
+					
+					-- Plain text, such as MOTD
+					else
+						settings[prefix] = suffix	
+					end
+
+					-- Show in console
+					print(prefix, settings[prefix])
+				end		
+			end	
+		else
+			break
+		end
+	end
+
+	--Finally
+	file:close()
+end
+
+-- Issue a response seperated by a newline (\n causes graphical overlap of chat messages)
+respond = function(player, message, colour)
+	Chat:Send(player, " ", colour)
+	Chat:Send(player, message, colour)
+end
+
+-- Check a player is admin
+checkAdmin = function(player)
+	for key,value in pairs(admins) do
+		if tostring(player:GetSteamId()) == value then
+			-- Admin found!
+			return true
+		end	
+	end
+
+	-- No admin found
+	return false
+end
+
+-- Match a name to a user entered query
+getPlayerFromName = function(query)
+	-- Get all players matching target description
+	local results = Player.Match(query)
+
+	-- For all matching players, find exact name match
+	for index, player in ipairs(results) do -- 'pairs' not 'ipairs'?
+		if player:GetName() == query then
+			return player
+		end
+	end
+
+	return nil	-- Java-like return null (here 'nil') if no result
+end
+
+--------------------------------------- Main Execution ---------------------------------------
+
 -- Subscribe to game events
+Events:Subscribe("ModuleLoad", onModuleLoad)
 Events:Subscribe("PlayerJoin", onPlayerJoin)
 Events:Subscribe("PlayerQuit", onPlayerQuit)
 Events:Subscribe("PlayerChat", onPlayerChat)
 Events:Subscribe("PlayerDeath", onPlayerDeath)
-Events:Subscribe("ModuleLoad", onModuleLoad)
-
---------------- Lua Notes ---------------
--- A comment is preceded by '--'
--- Type is inferred
--- print() can have multiple arguments for long messages
--- '..' is the string concatenation operator
--- ':' is the call operator for objects
--- '.' is the call operator for static methods
--- World instance is DefaultWorld
